@@ -110,9 +110,11 @@ async def cmd_timer_tp(message: types.Message):
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             return await message.reply("Ошибка: Такого времени не существует.")
             
+        # Берем указанное время за основу старта
         start_time = now_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
         
-        if start_time < now_msk:
+        # Если указанное время сильно в будущем (больше чем на сутки), или если нужна защита — можно оставить проверку. 
+        # Но теперь мы разрешаем указывать время из прошлого (ведь ТП могло начаться раньше).
             return await message.reply(
                 f"Ошибка: Время {args} по МСК уже прошло. Текущее время МСК: {now_msk.strftime('%H:%M')}."
             )
