@@ -6,28 +6,35 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-# Твой токен
 BOT_TOKEN = "9207147272:AAHhfTvMw11irSL_XPwvuUayE19ofQf1ccg"
-# Жесткая привязка к московскому времени
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Словари для хранения данных в памяти (для продакшена переноси в БД)
-chat_settings = {}  # Формат: {chat_id: {'duration': 15, 'admin_only': True}}
-chat_timers = {}    # Формат: {chat_id: [task1, task2]}
+chat_settings = {}
+chat_timers = {}
 
 async def is_admin(chat: types.Chat, user_id: int) -> bool:
-    """Проверка прав администратора в чате."""
     if chat.type == "private":
         return True
     member = await chat.get_member(user_id)
     return member.status in ["administrator", "creator"]
 
+@dp.message(F.text.in_(["/start", "/help", ".хелп", ".помощь"]))
+async def cmd_help(message: types.Message):
+    text = (
+        "<b>Инструкция по управлению таймером:</b>\n\n"
+        "• <code>.таймер тп</code> — запустить таймер с текущего времени.\n"
+        "• <code>.таймер тп ЧЧ:ММ</code> — запустить отсчет с указанного времени по МСК (пример: <code>.таймер тп 12:34</code>).\n"
+        "• <code>.таймер отмена</code> (или <code>.таймер стоп</code>) — отменить все активные таймеры в чате.\n"
+        "• <code>.таймер настройки &lt;мин&gt; &lt;админ: 1/0&gt;</code> — изменить время и доступ (пример: <code>.таймер настройки 15 1</code>).\n\n"
+        "<i>Ограничения: максимум 2 активных таймера на один чат.</i>"
+    )
+    await message.reply(text)
+
 @dp.message(F.text.startswith(".таймер настройки"))
 async def cmd_timer_settings(message: types.Message):
-    """Смена настроек. Формат: .таймер настройки <минуты> <только_админ: 1 или 0>"""
     if not await is_admin(message.chat, message.from_user.id):
         return await message.reply("Ошибка: Менять настройки могут только администраторы.")
 
@@ -49,28 +56,47 @@ async def cmd_timer_settings(message: types.Message):
     except ValueError:
         await message.reply("Ошибка: Минуты и флаг админа должны быть целыми положительными числами.")
 
+@dp.message(F.text.in_([".таймер отмена", ".таймер стоп"]))
+async def cmd_timer_cancel(message: types.Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    settings = chat_settings.setdefault(chat_id, {"duration": 15, "admin_only": True})
+    
+    if settings["admin_only"] and not await is_admin(message.chat, user_id):
+        return await message.reply("Ошибка: Отменять таймеры разрешено только администраторам.")
+
+    active_tasks = chat_timers.get(chat_id, [])
+    # Оставляем только те, которые еще не завершились
+    active_tasks = [task for task in active_tasks if not task.done()]
+    
+    if not active_tasks:
+        return await message.reply("В этом чате нет активных таймеров для отмены.")
+
+    # Отменяем все активные задачи
+    for task in active_tasks:
+        task.cancel()
+        
+    chat_timers[chat_id] = []
+    await message.reply("⚠️ Все активные таймеры в этом чате успешно отменены.")
 
 @dp.message(F.text.startswith(".таймер тп"))
 async def cmd_timer_tp(message: types.Message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     
-    # Получаем настройки чата или ставим дефолт (15 мин, только админы)
     settings = chat_settings.setdefault(chat_id, {"duration": 15, "admin_only": True})
     
-    # Блок проверки прав
     if settings["admin_only"] and not await is_admin(message.chat, user_id):
         return await message.reply("Ошибка: Использование таймера разрешено только администраторам.")
         
-    # Блок проверки лимитов (очистка завершенных тасок перед проверкой)
     active_tasks = chat_timers.get(chat_id, [])
     active_tasks = [task for task in active_tasks if not task.done()]
     chat_timers[chat_id] = active_tasks
     
     if len(active_tasks) >= 2:
-        return await message.reply("Ошибка: В этом чате уже запущен максимальный лимит (2 таймера).")
+        return await message.reply("Ошибка: В этом чате уже запущен максимальный лимит (2 таймера). Отмените один из них через <code>.таймер отмена</code>.")
 
-    # Блок работы со временем
     args = message.text.replace(".таймер тп", "").strip()
     now_msk = datetime.now(MSK_TZ)
     start_time = now_msk
@@ -86,7 +112,6 @@ async def cmd_timer_tp(message: types.Message):
             
         start_time = now_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
         
-        # Защита от ошибок ввода прошедшего времени
         if start_time < now_msk:
             return await message.reply(
                 f"Ошибка: Время {args} по МСК уже прошло. Текущее время МСК: {now_msk.strftime('%H:%M')}."
@@ -95,7 +120,6 @@ async def cmd_timer_tp(message: types.Message):
     end_time = start_time + timedelta(minutes=settings["duration"])
     delay_seconds = (end_time - now_msk).total_seconds()
     
-    # Создание асинхронной задачи и запись в лимит
     task = asyncio.create_task(run_timer(chat_id, delay_seconds, end_time))
     chat_timers[chat_id].append(task)
     
@@ -106,7 +130,6 @@ async def cmd_timer_tp(message: types.Message):
     )
 
 async def run_timer(chat_id: int, delay: float, end_time: datetime):
-    """Асинхронная функция ожидания."""
     try:
         await asyncio.sleep(delay)
         await bot.send_message(chat_id, f"⚠️ <b>Внимание!</b> Таймер на {end_time.strftime('%H:%M')} сработал!")
@@ -119,3 +142,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
