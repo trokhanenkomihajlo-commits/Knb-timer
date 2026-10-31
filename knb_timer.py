@@ -114,10 +114,7 @@ async def cmd_timer_tp(message: types.Message):
         start_time = now_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
         
         # Если указанное время сильно в будущем (больше чем на сутки), или если нужна защита — можно оставить проверку. 
-        # Но теперь мы разрешаем указывать время из прошлого (ведь ТП могло начаться раньше).
-            return await message.reply(
-                f"Ошибка: Время {args} по МСК уже прошло. Текущее время МСК: {now_msk.strftime('%H:%M')}."
-            )
+        # Но теперь мы разрешаем указывать время из прошлого (ведь ТП могло начаться раньше)
             
     end_time = start_time + timedelta(minutes=settings["duration"])
     delay_seconds = (end_time - now_msk).total_seconds()
